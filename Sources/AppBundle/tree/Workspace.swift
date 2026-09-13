@@ -120,10 +120,23 @@ extension MonitorInfo {
             return existing
         }
         // What if monitor configuration changed? (frame.origin is changed)
-        rearrangeWorkspacesOnMonitors()
-        // Normally, recursion should happen only once more because we must take the value from the cache
-        // (Unless, monitor configuration data race happens)
-        return self.activeWorkspace
+        //
+        // Consult the mapping produced by the re-seat we just performed instead of
+        // re-reading the globals. `rect` is fixed per MonitorInfo and is derived from
+        // `mainMonitorInfo.height`, so a MonitorInfo that predates a display
+        // reconfiguration is not among the keys that the re-seat writes. Re-reading
+        // the globals therefore never matches, and retrying recursively never
+        // terminates.
+        // https://github.com/nikitabobko/AeroSpace/discussions/2262
+        let seated = rearrangeWorkspacesOnMonitors()
+        if let existing = seated[rect.topLeftCorner] {
+            return existing
+        }
+        // This monitor is not part of the current monitor list. Seat it explicitly so
+        // that the cache stays self-consistent for the caller.
+        let stub = getStubWorkspace(forPoint: rect.topLeftCorner)
+        _ = setActiveWorkspace(stub)
+        return stub
     }
 
     @MainActor
@@ -163,7 +176,8 @@ extension CGPoint {
 }
 
 @MainActor
-private func rearrangeWorkspacesOnMonitors() {
+@discardableResult
+private func rearrangeWorkspacesOnMonitors() -> [CGPoint: Workspace] {
     let newScreens = monitorInfos.map(\.rect.topLeftCorner)
     var newScreenToOldScreenMapping: [CGPoint: CGPoint] = [:]
     for (oldScreen, _) in screenPointToVisibleWorkspace {
@@ -191,6 +205,7 @@ private func rearrangeWorkspacesOnMonitors() {
         check(newScreen.setActiveWorkspace(stubWorkspace),
               "getStubWorkspace generated incompatible stub workspace (\(stubWorkspace)) for the monitor (\(newScreen)")
     }
+    return screenPointToVisibleWorkspace
 }
 
 @MainActor
